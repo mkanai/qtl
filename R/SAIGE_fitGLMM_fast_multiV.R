@@ -47,6 +47,7 @@
 #' @param isCovariateOffset logical. Whether to estimate fixed effect coeffciets. By default, FALSE.
 #' @param isStoreSigma logical. Whether to store sigma matrix. By default, FALSE. If number of individuals is greater than 10,000, this option may use large memory
 #' @param isShrinkModelOutput logical. remove unnecessary objects for step2 from the model output. By default, FALSE.
+#' @param downsamplingFactor numeric. If a value is less than 1, If a downsample factor is less than 1, the number of cells will be downsampled by the factor for initial rounds of PGC. By default, 1
 #' @return a file ended with .rda that contains the glmm model information, a file ended with .varianceRatio.txt that contains the variance ratio values, and a file ended with #markers.SPAOut.txt that contains the SPAGMMAT tests results for the markers used for estimating the variance ratio.
 #' @export
 fitNULLGLMM_multiV <- function(plinkFile = "",
@@ -114,7 +115,8 @@ fitNULLGLMM_multiV <- function(plinkFile = "",
                                VcellmatSampleFilelist = "",
                                useGRMtoFitNULL = TRUE,
                                isStoreSigma = FALSE,
-                               isShrinkModelOutput = FALSE) {
+                               isShrinkModelOutput = FALSE,
+                               downsamplingFactor = 1) {
   ## set up output files
   modelOut <- paste0(outputPrefix, ".rda")
 
@@ -991,6 +993,33 @@ fitNULLGLMM_multiV <- function(plinkFile = "",
     set_useGRMtoFitNULL(useGRMtoFitNULL)
 
     if (traitType != "count_nb") {
+      if (downsamplingFactor < 1) {
+        cat("Fitting the NULL GLMM with downsampled cells\n")
+        dataMerge_sort_downsampled <- data.table::as.data.table(dataMerge_sort)[, .SD[sample(.N, .N * downsamplingFactor)], by = IID]
+        print(length(unique(dataMerge_sort$IID)))
+        idx_downsampled <- sort(which(dataMerge_sort$IndexPheno %in% dataMerge_sort_downsampled$IndexPheno))
+        dataMerge_sort_downsampled <- dataMerge_sort[idx_downsampled, ]
+        fit0_downsampled <- glm(fit0$formula, data = fit0$data[idx_downsampled, ], offset = fit0$offset[idx_downsampled], family = fit0$family, weights = fit0$prior.weights[idx_downsampled])
+        system.time(modglmm_downsampled <- glmmkin.ai_PCG_Rcpp_multiV(bedFile, bimFile, famFile, Xorig, isCovariateOffset,
+          fit0_downsampled,
+          tau = tau, fixtau = fixtau, maxiter = maxiter,
+          tol = tol * 10, verbose = TRUE, nrun = nrun, tolPCG = tolPCG,
+          maxiterPCG = maxiterPCG, subPheno = dataMerge_sort_downsampled, indicatorGenoSamplesWithPheno = indicatorGenoSamplesWithPheno[idx_downsampled],
+          obj.noK = obj.noK, out.transform = out.transform,
+          tauInit = tauInit, memoryChunk = memoryChunk,
+          LOCO = LOCO, chromosomeStartIndexVec = chromosomeStartIndexVec,
+          chromosomeEndIndexVec = chromosomeEndIndexVec,
+          traceCVcutoff = traceCVcutoff, isCovariateTransform = isCovariateTransform,
+          isDiagofKinSetAsOne = isDiagofKinSetAsOne,
+          isLowMemLOCO = isLowMemLOCO, covarianceIdxMat = covarianceIdxMat, isStoreSigma = isStoreSigma, useSparseGRMtoFitNULL = useSparseGRMtoFitNULL, useGRMtoFitNULL = useGRMtoFitNULL, isSparseGRMIdentity = isSparseGRMIdentity,
+          isDownsampled = TRUE
+        ))
+        tau <- modglmm_downsampled$theta
+        tauInit <- tau
+        print("Downsampled tau")
+        print(tau)
+      }
+
       system.time(modglmm <- glmmkin.ai_PCG_Rcpp_multiV(bedFile, bimFile, famFile, Xorig, isCovariateOffset,
         fit0,
         tau = tau, fixtau = fixtau, maxiter = maxiter,
@@ -1977,7 +2006,7 @@ extractVarianceRatio_multiV <- function(obj.glmm.null,
 
 
 # Fits the null glmm
-glmmkin.ai_PCG_Rcpp_multiV <- function(bedFile, bimFile, famFile, Xorig, isCovariateOffset, fit0, tau = c(0, 0), fixtau = c(0, 0), maxiter = 20, tol = 0.02, verbose = TRUE, nrun = 30, tolPCG = 1e-5, maxiterPCG = 500, subPheno, indicatorGenoSamplesWithPheno, obj.noK, out.transform, tauInit, memoryChunk, LOCO, chromosomeStartIndexVec, chromosomeEndIndexVec, traceCVcutoff, isCovariateTransform, isDiagofKinSetAsOne, isLowMemLOCO, covarianceIdxMat = NULL, isStoreSigma = FALSE, useSparseGRMtoFitNULL = TRUE, useGRMtoFitNULL = TRUE, isSparseGRMIdentity = FALSE) {
+glmmkin.ai_PCG_Rcpp_multiV <- function(bedFile, bimFile, famFile, Xorig, isCovariateOffset, fit0, tau = c(0, 0), fixtau = c(0, 0), maxiter = 20, tol = 0.02, verbose = TRUE, nrun = 30, tolPCG = 1e-5, maxiterPCG = 500, subPheno, indicatorGenoSamplesWithPheno, obj.noK, out.transform, tauInit, memoryChunk, LOCO, chromosomeStartIndexVec, chromosomeEndIndexVec, traceCVcutoff, isCovariateTransform, isDiagofKinSetAsOne, isLowMemLOCO, covarianceIdxMat = NULL, isStoreSigma = FALSE, useSparseGRMtoFitNULL = TRUE, useGRMtoFitNULL = TRUE, isSparseGRMIdentity = FALSE, isDownsampled = FALSE) {
   # Fits the null generalized linear mixed model for a poisson, binomial, and gaussian
   # Args:
   #  genofile: string. Plink file for the M1 markers to be used to construct the genetic relationship matrix
@@ -2261,6 +2290,13 @@ glmmkin.ai_PCG_Rcpp_multiV <- function(bedFile, bimFile, famFile, Xorig, isCovar
   }
 
   if (verbose) cat("\nFinal ", tau, ":\n")
+
+  if (isDownsampled) {
+    t_end_null <- proc.time()
+    cat("t_end_null - t_begin, fitting the NULL model for downsampled cells took\n")
+    print(t_end_null - t_begin)
+    return(list(theta = tau))
+  }
 
 
   # if(isStoreSigma){

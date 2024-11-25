@@ -249,6 +249,10 @@ option_list <- list(
   make_option("--isShrinkModelOutput",
     type = "logical", default = TRUE,
     help = "Optional. Whether to remove unnecessary objects for step2 from the model output. [default, 'TRUE']"
+  ),
+  make_option("--downsamplingFactor",
+    type = "numeric", default = 1,
+    help = "Optional. If a downsampling factor is less than 1, the number of cells will be downsampled by the factor for initial rounds of PGC. [default=1]"
   )
 )
 
@@ -342,7 +346,8 @@ fitNULLGLMM_multiV(
   varWeightsCol = opt$varWeightsCol,
   sampleCovarCol = scovars,
   isStoreSigma = opt$isStoreSigma,
-  isShrinkModelOutput = opt$isShrinkModelOutput
+  isShrinkModelOutput = opt$isShrinkModelOutput,
+  downsamplingFactor = opt$downsamplingFactor
 )
 
 if (!opt$isCovariateOffset) {
@@ -415,7 +420,8 @@ if (!opt$isCovariateOffset) {
       varWeightsCol = opt$varWeightsCol,
       sampleCovarCol = scovars,
       isStoreSigma = opt$isStoreSigma,
-      isShrinkModelOutput = opt$isShrinkModelOutput
+      isShrinkModelOutput = opt$isShrinkModelOutput,
+      downsamplingFactor = opt$downsamplingFactor
     )
     my_env <- new.env()
     load(paste0(opt$outputPrefix, ".offset.rda"), envir = my_env)
